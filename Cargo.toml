@@ -1,0 +1,29 @@
+[package]
+name = "launchx"
+version = "0.1.0"
+description = "Fast project workspace launcher"
+edition = "2021"
+
+[dependencies]
+# wgpu renderer (DX12/Metal/Vulkan) instead of default glow/OpenGL:
+# fixes screen flickering seen with some Windows OpenGL drivers.
+eframe = { version = "0.31", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "wgpu",
+    "wayland",
+    "x11",
+] }
+egui = "0.31"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+open = "5"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
