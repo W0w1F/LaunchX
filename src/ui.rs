@@ -496,32 +496,72 @@ impl LaunchXApp {
     }
 
     fn toasts_overlay(&mut self, ctx: &egui::Context) {
-        self.toasts
-            .retain(|t| t.created.elapsed() < Duration::from_secs(4));
+        const SUCCESS_VISIBLE_SECS: f32 = 4.0;
+        const WARNING_VISIBLE_SECS: f32 = 5.0;
+        const FADE_SECS: f32 = 0.4;
+
+        self.toasts.retain(|t| {
+            let visible_secs = if t.is_error {
+                WARNING_VISIBLE_SECS
+            } else {
+                SUCCESS_VISIBLE_SECS
+            };
+            t.created.elapsed().as_secs_f32() < visible_secs + FADE_SECS
+        });
         if self.toasts.is_empty() {
             return;
         }
-        ctx.request_repaint_after(Duration::from_millis(250));
 
         egui::Area::new(Id::new("toasts"))
             .anchor(Align2::RIGHT_BOTTOM, Vec2::new(-16.0, -16.0))
             .show(ctx, |ui| {
                 for t in &self.toasts {
+                    let age = t.created.elapsed().as_secs_f32();
+                    let visible_secs = if t.is_error {
+                        WARNING_VISIBLE_SECS
+                    } else {
+                        SUCCESS_VISIBLE_SECS
+                    };
+                    let opacity = if age <= visible_secs {
+                        1.0
+                    } else {
+                        (1.0 - (age - visible_secs) / FADE_SECS).clamp(0.0, 1.0)
+                    };
                     let bg = if t.is_error {
                         Color32::from_rgb(0xdc, 0x26, 0x26)
                     } else {
                         Color32::from_rgb(0x05, 0x96, 0x69)
-                    };
+                    }
+                    .gamma_multiply(opacity);
                     Frame::new()
                         .fill(bg)
                         .corner_radius(CornerRadius::same(6))
                         .inner_margin(Margin::symmetric(12, 8))
                         .show(ui, |ui| {
-                            ui.label(RichText::new(&t.message).color(Color32::WHITE));
+                            ui.label(
+                                RichText::new(&t.message)
+                                    .color(Color32::WHITE.gamma_multiply(opacity)),
+                            );
                         });
                     ui.add_space(6.0);
                 }
             });
+
+        // Repaint smoothly while a toast is fading; otherwise checking a few
+        // times per second is enough until its five-second warning period ends.
+        let fading = self.toasts.iter().any(|t| {
+            let visible_secs = if t.is_error {
+                WARNING_VISIBLE_SECS
+            } else {
+                SUCCESS_VISIBLE_SECS
+            };
+            t.created.elapsed().as_secs_f32() > visible_secs
+        });
+        ctx.request_repaint_after(if fading {
+            Duration::from_millis(16)
+        } else {
+            Duration::from_millis(250)
+        });
     }
 }
 
@@ -547,6 +587,7 @@ fn validate(p: &Project) -> String {
 fn project_card(ui: &mut egui::Ui, p: &Project, width: f32) -> (bool, bool) {
     let mut launch = false;
     let mut edit = false;
+    let mut edit_button_rect: Option<egui::Rect> = None;
     let accent = hex_color(&p.color);
 
     let frame = Frame::new()
@@ -597,7 +638,9 @@ fn project_card(ui: &mut egui::Ui, p: &Project, width: f32) -> (bool, bool) {
                 });
 
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                    if ui.small_button("✏").on_hover_text("Edit project").clicked() {
+                    let response = ui.small_button("✏").on_hover_text("Edit project");
+                    edit_button_rect = Some(response.rect);
+                    if response.clicked() {
                         edit = true;
                     }
                 });
@@ -605,14 +648,19 @@ fn project_card(ui: &mut egui::Ui, p: &Project, width: f32) -> (bool, bool) {
         })
         .response;
 
-    let resp = resp.interact(Sense::click());
-    if resp.double_clicked() {
-        launch = true;
-    } else if resp.clicked() && !edit {
-        // Single click also opens the editor (spec: click = configure).
-        edit = true;
+    // Keep the card's launch interaction from overlapping the edit button. An
+    // interaction registered over the whole frame here would sit on top of the
+    // button and consume its clicks.
+    let mut launch_rect = resp.rect;
+    if let Some(edit_rect) = edit_button_rect {
+        launch_rect.max.x = (edit_rect.min.x - ui.spacing().item_spacing.x)
+            .max(launch_rect.min.x);
     }
-    resp.on_hover_text("Double-click to launch · click to edit");
+    let launch_resp = ui.interact(launch_rect, resp.id.with("launch"), Sense::click());
+    if launch_resp.double_clicked() {
+        launch = true;
+    }
+    launch_resp.on_hover_text("Double-click to launch · use the edit icon to edit");
 
     (launch, edit)
 }
